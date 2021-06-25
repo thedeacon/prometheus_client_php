@@ -14,13 +14,13 @@ class APCng implements Adapter
     /** @var string Default prefix to use for APC keys. */
     const PROMETHEUS_PREFIX = 'prom';
 
-    /** @var int Number of retries before we give on apcu_cas(). This can prevent an infinite-loop if we fill up APC. (Default: 2000) */
+    /** @var int Number of retries before we give on apcu_cas(). This can prevent an infinite-loop if we fill up APC. */
     const CAS_LOOP_RETRIES = 2000;
 
     /** @var int Number of seconds for cache object to live in APC. When new metrics are created by other threads, this is the maximum delay until they are discovered.
                  Setting this to a value less than 1 will disable the cache, which will negatively impact performance when making multiple collect*() function-calls.
-                 (Default: 1) If more than a few thousand metrics are being tracked, disabling cache will be faster, due to apcu_store/fetch serialization being slow. */
-    const METAINFO_CACHE_TTL = 1;
+                 If more than a few thousand metrics are being tracked, disabling cache will be faster, due to apcu_store/fetch serialization being slow. */
+    private $metainfoCacheTTL = 1;
 
     /** @var string APC key where array of all discovered+created metainfo keys is stored */
     private $metainfoCacheKey;
@@ -204,10 +204,12 @@ class APCng implements Adapter
      * a runtime exception if the lock was unable to be acquired. (This has happened in stress-testing when APC
      * filled up completely while adding Prometheus metrics, and apcu_add/apcu_cas() never succeeded.)
      *
+     * @param string $key
+     * @param int $apc_ttl
      * @return void
      * @throws RuntimeException
      */
-    private function acquireLock(string $key, int $apc_ttl = self::METAINFO_CACHE_TTL): void
+    private function acquireLock(string $key, int $apc_ttl): void
     {
         $lock = $key . ':_lock';
         $loopCatcher = self::CAS_LOOP_RETRIES;
@@ -243,7 +245,7 @@ class APCng implements Adapter
      */
     private function addItemToKey(string $key, string $item): void
     {
-        $this->acquireLock($key);
+        $this->acquireLock($key, $this->metainfoCacheTTL);
 
         // Modify serialized array stored in $key
         $arr = apcu_fetch($key);
@@ -291,6 +293,16 @@ class APCng implements Adapter
     }
 
     /**
+     * Sets the metainfo cache TTL; how long to retain metainfo before scanning APC keyspace again (default 1 second)
+     *
+     * @param int $ttl
+     * @return void
+     */
+    public function setMetainfoTTL(int $ttl) {
+        $this->metainfoCacheTTL = $ttl;
+    }
+
+    /**
      * Scans the APC keyspace for all metainfo keys. A new metainfo cache array is built,
      * which references all metadata keys in APC at that moment. This prevents a corner-case
      * where an orphaned key, while remaining writable, is rendered permanently invisible when reading
@@ -306,7 +318,7 @@ class APCng implements Adapter
      * @param int $apc_ttl
      * @return array
      */
-    private function scanAndBuildMetainfoCache(int $apc_ttl = self::METAINFO_CACHE_TTL): array
+    private function scanAndBuildMetainfoCache(int $apc_ttl): array
     {
         $arr = [];
         $matchAllMeta = sprintf('/^%s:.*:meta/', $this->prometheusPrefix);
@@ -459,7 +471,7 @@ class APCng implements Adapter
         $arr = [];
         $metaCache = apcu_fetch($this->metainfoCacheKey);
         if (!is_array($metaCache)) {
-            $metaCache = $this->scanAndBuildMetainfoCache();
+            $metaCache = $this->scanAndBuildMetainfoCache($this->metainfoCacheTTL);
         }
         foreach ($metaCache as $metaKey) {
             if ((1 === preg_match('/' . $this->prometheusPrefix . ':' . $type . ':.*:meta/', $metaKey)) && false !== ($gauge = apcu_fetch($metaKey))) {
