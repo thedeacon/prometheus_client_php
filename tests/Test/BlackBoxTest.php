@@ -64,15 +64,24 @@ class BlackBoxTest extends TestCase
 
     /**
      * @test
+     * @dataProvider countersDataProvider
+     * @param int|float $increment
      */
-    public function countersShouldIncrementAtomically(): void
+    public function countersShouldIncrementAtomically($increment): void
     {
         $start = microtime(true);
         $promises = [];
         $sum = 0;
+        $n = $increment;
         for ($i = 0; $i < 1100; $i++) {
-            $promises[] =  $this->client->getAsync('/examples/some_counter.php?c=' . $i . '&adapter=' . $this->adapter);
-            $sum += $i;
+            if (is_float($n)) {
+                $url = '/examples/some_counter.php?c=' . number_format($n, 2) . '&adapter=' . $this->adapter;
+            } else {
+                $url = '/examples/some_counter.php?c=' . $n . '&adapter=' . $this->adapter;
+            }
+            $promises[] =  $this->client->getAsync($url);
+            $sum += $n;
+            $n += $increment;
         }
 
         Promise\settle($promises)->wait();
@@ -83,6 +92,17 @@ class BlackBoxTest extends TestCase
         $body = (string)$metricsResult->getBody();
 
         self::assertThat($body, self::stringContains('test_some_counter{type="blue"} ' . $sum));
+    }
+
+    /**
+     * @return array<int, array<float|int>>
+     */
+    public function countersDataProvider(): array
+    {
+        return [
+            [1],
+            [0.5]
+        ];
     }
 
     /**
@@ -125,6 +145,44 @@ test_some_histogram_bucket{type="blue",le="9"} 10
 test_some_histogram_bucket{type="blue",le="+Inf"} 10
 test_some_histogram_count{type="blue"} 10
 test_some_histogram_sum{type="blue"} 45
+EOF
+        ));
+    }
+
+    /**
+     * @test
+     */
+    public function summariesShouldIncrementAtomically(): void
+    {
+        $start = microtime(true);
+        $promises = [
+            $this->client->getAsync('/examples/some_summary.php?c=1&adapter=' . $this->adapter),
+            $this->client->getAsync('/examples/some_summary.php?c=2&adapter=' . $this->adapter),
+            $this->client->getAsync('/examples/some_summary.php?c=3&adapter=' . $this->adapter),
+            $this->client->getAsync('/examples/some_summary.php?c=4&adapter=' . $this->adapter),
+            $this->client->getAsync('/examples/some_summary.php?c=5&adapter=' . $this->adapter),
+            $this->client->getAsync('/examples/some_summary.php?c=6&adapter=' . $this->adapter),
+            $this->client->getAsync('/examples/some_summary.php?c=7&adapter=' . $this->adapter),
+            $this->client->getAsync('/examples/some_summary.php?c=8&adapter=' . $this->adapter),
+            $this->client->getAsync('/examples/some_summary.php?c=9&adapter=' . $this->adapter),
+            $this->client->getAsync('/examples/some_summary.php?c=10&adapter=' . $this->adapter),
+        ];
+
+        Promise\settle($promises)->wait();
+        $end = microtime(true);
+        echo "\ntime: " . ($end - $start) . "\n";
+
+        $metricsResult = $this->client->get('/examples/metrics.php?adapter=' . $this->adapter);
+        $body = (string)$metricsResult->getBody();
+
+        self::assertThat($body, self::stringContains(<<<EOF
+test_some_summary{type="blue",quantile="0.01"} 1.09
+test_some_summary{type="blue",quantile="0.05"} 1.45
+test_some_summary{type="blue",quantile="0.5"} 5.5
+test_some_summary{type="blue",quantile="0.95"} 9.55
+test_some_summary{type="blue",quantile="0.99"} 9.91
+test_some_summary_count{type="blue"} 10
+test_some_summary_sum{type="blue"} 55
 EOF
         ));
     }
